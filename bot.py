@@ -278,4 +278,5 @@ app.add_handler(CommandHandler("demote", demote))
 app.add_handler(CommandHandler("refe", refe))
 
 print("Bot corriendo...")
+print("TOKEN:", TOKEN)
 app.run_polling()
