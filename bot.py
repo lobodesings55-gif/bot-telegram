@@ -7,6 +7,8 @@ from io import BytesIO
 
 import os
 TOKEN = os.getenv("8603013918:AAFvrsFz-V6ros2ULgjt4EZI2kh6OzE4H4U")
+
+print("8603013918:AAFvrsFz-V6ros2ULgjt4EZI2kh6OzE4H4U:", TOKEN)  # 
 DESTINO_CHAT_ID = -1003856217956
 
 # ---------------- RUTA WATERMARK ----------------
