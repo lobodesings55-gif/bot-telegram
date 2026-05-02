@@ -207,12 +207,20 @@ def add_watermark_ffmpeg(input_file, output_file, watermark):
 
 # ---------------- REFE ----------------
 async def refe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await es_admin(update, context):
+        return await update.message.reply_text("❌ No tienes permisos")
+
     msg = update.message.reply_to_message
+    if not msg:
+        return await update.message.reply_text("❌ Responde a imagen, video o gif")
+
     user = msg.from_user
     username = f"@{user.username}" if user.username else user.first_name
+    texto_usuario = msg.caption if msg.caption else ""
 
-    caption = f"MAMA CULOS VIP\n{username}"
+    caption = f"MAMA CULOS VIP\n{username}\n{texto_usuario}"
 
+    # -------- IMAGEN --------
     if msg.photo:
         file = await msg.photo[-1].get_file()
         img = Image.open(BytesIO(await file.download_as_bytearray())).convert("RGBA")
@@ -220,13 +228,57 @@ async def refe(update: Update, context: ContextTypes.DEFAULT_TYPE):
         wm = Image.open(WATERMARK_PATH).resize((350, 350)).convert("RGBA")
         wm.putalpha(int(255 * 0.6))
 
-        img.alpha_composite(wm, ((img.width-350)//2, (img.height-350)//2))
+        img.alpha_composite(wm, ((img.width - 350)//2, (img.height - 350)//2))
 
         bio = BytesIO()
+        bio.name = "img.png"
         img.save(bio, "PNG")
         bio.seek(0)
 
-        await context.bot.send_photo(DESTINO_CHAT_ID, photo=bio, caption=caption)
+        await context.bot.send_photo(
+            DESTINO_CHAT_ID,
+            photo=bio,
+            caption=caption
+        )
+
+    # -------- VIDEO --------
+    elif msg.video:
+        file = await msg.video.get_file()
+        input_path = "video.mp4"
+        output_path = "video_wm.mp4"
+
+        await file.download_to_drive(input_path)
+
+        add_watermark_ffmpeg(input_path, output_path, WATERMARK_PATH)
+
+        with open(output_path, "rb") as vid:
+            await context.bot.send_video(
+                DESTINO_CHAT_ID,
+                video=vid,
+                caption=caption
+            )
+
+    # -------- GIF --------
+    elif msg.animation:
+        file = await msg.animation.get_file()
+        input_path = "gif.gif"
+        output_path = "gif_wm.gif"
+
+        await file.download_to_drive(input_path)
+
+        add_watermark_ffmpeg(input_path, output_path, WATERMARK_PATH)
+
+        with open(output_path, "rb") as gif:
+            await context.bot.send_animation(
+                DESTINO_CHAT_ID,
+                animation=gif,
+                caption=caption
+            )
+
+    else:
+        return await update.message.reply_text("❌ Solo imagen, video o gif")
+
+    await update.message.reply_text("✅ Enviado")
 
 # ---------------- MAIN ----------------
 app = ApplicationBuilder().token(TOKEN).build()
