@@ -6,13 +6,6 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from PIL import Image
 from io import BytesIO
-from telegram import ChatPermissions
-
-await context.bot.restrict_chat_member(
-    update.effective_chat.id,
-    user.id,
-    permissions=ChatPermissions(can_send_messages=False)
-)
 
 # ---------------- CONFIG ----------------
 TOKEN = "8603013918:AAFvrsFz-V6ros2ULgjt4EZI2kh6OzE4H4U"
@@ -37,7 +30,7 @@ async def guardar_usuario(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user:
         return
     cursor.execute("INSERT OR REPLACE INTO users VALUES (?, ?, ?)",
-                   (user.id, user.username or "", user.first_name))
+        (user.id, user.username or "", user.first_name))
     conn.commit()
 
 # ---------------- ADMIN ----------------
@@ -47,8 +40,11 @@ async def es_admin(update, context):
 
 # ---------------- DEBUG ----------------
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("PING OK")
-    await update.effective_message.reply_text("pong 🟢")
+    await update.message.reply_text("pong 🟢")
+
+async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("📩 Mensaje recibido")
+
 # ---------------- USER FETCH ----------------
 async def obtener_usuario(update, context):
     if update.message.reply_to_message:
@@ -150,7 +146,7 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         plan="Free"; fecha="No"; restante="0"
 
-    await update.effective_message.reply_text(f"""
+    await update.message.reply_text(f"""
 👑 Usuario
 ID: {user.id}
 User: @{user.username}
@@ -203,18 +199,15 @@ async def unmute(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------- MAIN ----------------
 app = ApplicationBuilder().token(TOKEN).build()
 
-# ✅ COMANDOS PRIMERO
+app.add_handler(MessageHandler(filters.ALL, guardar_usuario))
+app.add_handler(MessageHandler(filters.ALL, debug))
+
 app.add_handler(CommandHandler("ping", ping))
 app.add_handler(CommandHandler("vip", vip))
 app.add_handler(CommandHandler("info", info))
 app.add_handler(CommandHandler("warn", warn))
 app.add_handler(CommandHandler("mute", mute))
 app.add_handler(CommandHandler("unmute", unmute))
-app.add_handler(CommandHandler("refe", refe))
-
-# ✅ DESPUÉS LOS GENERALES
-app.add_handler(MessageHandler(filters.ALL, guardar_usuario))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, debug))
 
 print("✅ Bot corriendo...")
 app.run_polling()
