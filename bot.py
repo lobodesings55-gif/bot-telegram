@@ -1,3 +1,4 @@
+
 import os
 import sqlite3
 import time
@@ -36,12 +37,79 @@ CREATE TABLE IF NOT EXISTS vip_users (
 
 conn.commit()
 
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    username TEXT,
+    name TEXT
+)
+""")
+conn.commit()
+
 # ---------------- ROLES ----------------
 role_styles = {
     "seller": "💰 Seller",
     "admin": "🛠 Admin",
     "owner": "👑 Owner"
 }
+
+# ---------------- obtener_usuario ----------------
+
+async def obtener_usuario(update, context):
+    # RESPUESTA
+    if update.message.reply_to_message:
+        return update.message.reply_to_message.from_user
+
+    if len(context.args) >= 1:
+        arg = context.args[0]
+
+        # SI ES ID
+        if arg.isdigit():
+            try:
+                return await context.bot.get_chat_member(
+                    update.effective_chat.id,
+                    int(arg)
+                )
+            except:
+                return None
+
+        # SI ES @USERNAME
+        username = arg.replace("@", "")
+
+        cursor.execute(
+            "SELECT user_id, username, name FROM users WHERE username=?",
+            (username,)
+        )
+        data = cursor.fetchone()
+
+        if data:
+            class UserFake:
+                def __init__(self, id, username, name):
+                    self.id = id
+                    self.username = username
+                    self.first_name = name
+
+            return UserFake(data[0], data[1], data[2])
+
+    return None
+
+# ---------------- GUARDAR USUARIOS AUTOMÁTICAMENTE ----------------
+
+async def guardar_usuario(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+
+    if not user:
+        return
+
+    username = user.username if user.username else ""
+    name = user.first_name
+
+    cursor.execute("""
+    INSERT OR REPLACE INTO users (user_id, username, name)
+    VALUES (?, ?, ?)
+    """, (user.id, username, name))
+
+    conn.commit()
 
 # ---------------- ADMIN ----------------
 async def es_admin(update, context):
@@ -105,18 +173,40 @@ async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await es_admin(update, context):
         return
 
-    if update.message.reply_to_message:
-        user_id = update.message.reply_to_message.from_user.id
-        await context.bot.ban_chat_member(update.effective_chat.id, user_id)
-        await update.message.reply_text("🚫 Usuario baneado")
+    user = await obtener_usuario(update, context)
+    if not user:
+        return await update.message.reply_text("❌ Usuario no encontrado")
+
+    await context.bot.ban_chat_member(update.effective_chat.id, user.id)
+
+    await update.message.reply_text("🚫 Usuario baneado")
 
 # ---------------- VIP ----------------
 async def vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await es_admin(update, context):
-        return
+        return await update.message.reply_text("❌ Sin permisos")
 
+    if update.message.reply_to_message:
     user = update.message.reply_to_message.from_user
+
+    if len(context.args) < 1:
+        return await update.message.reply_text("Uso: /vip 15")
+
     dias = int(context.args[0])
+
+else:
+    if len(context.args) < 2:
+        return await update.message.reply_text("Uso: /vip @user 15")
+
+    user = await obtener_usuario(update, context)
+    dias = int(context.args[1])
+    user = await obtener_usuario(update, context)
+    if not user:
+        return await update.message.reply_text("❌ Usuario no encontrado")
+
+    dias = int(context.args[1])
+    if dias not in [15, 30]:
+        return await update.message.reply_text("Solo 15 o 30 días")
 
     ahora = int(time.time())
     expira = ahora + dias * 86400
@@ -125,26 +215,107 @@ async def vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
                    (user.id, ahora, expira))
     conn.commit()
 
-    await update.message.reply_text("💎 VIP activado")
+    await update.message.reply_text(f"💎 VIP activado {dias} días")
+
+# ---------------- FREE ----------------
 
 async def free(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await es_admin(update, context):
         return
 
-    user = update.message.reply_to_message.from_user
+    user = await obtener_usuario(update, context)
+    if not user:
+        return await update.message.reply_text("❌ Usuario no encontrado")
+
     cursor.execute("DELETE FROM vip_users WHERE user_id=?", (user.id,))
     conn.commit()
 
     await update.message.reply_text("🗑 VIP eliminado")
 
+# ---------------- MUTE ----------------
+
+async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await es_admin(update, context):
+        return await update.message.reply_text("❌ Sin permisos")
+
+    user = await obtener_usuario(update, context)
+    if not user:
+        return await update.message.reply_text("❌ Usuario no encontrado")
+
+    await context.bot.restrict_chat_member(
+        update.effective_chat.id,
+        user.id,
+        permissions={}
+    )
+
+    await update.message.reply_text("🔇 Usuario muteado")
+
+# ---------------- unmute ----------------
+
+async def unmute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await es_admin(update, context):
+        return await update.message.reply_text("❌ Sin permisos")
+
+    user = await obtener_usuario(update, context)
+    if not user:
+        return await update.message.reply_text("❌ Usuario no encontrado")
+
+    await context.bot.restrict_chat_member(
+        update.effective_chat.id,
+        user.id,
+        permissions={
+            "can_send_messages": True,
+            "can_send_media_messages": True,
+            "can_send_other_messages": True
+        }
+    )
+
+    await update.message.reply_text("🔊 Usuario desmuteado")
+
+# ---------------- warn + AUTO BAN ----------------
+
+async def warn(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await es_admin(update, context):
+        return await update.message.reply_text("❌ Sin permisos")
+
+    user = await obtener_usuario(update, context)
+    if not user:
+        return await update.message.reply_text("❌ Usuario no encontrado")
+
+    username = f"@{user.username}" if user.username else user.first_name
+
+    cursor.execute("SELECT warns FROM warns WHERE user_id=?", (user.id,))
+    data = cursor.fetchone()
+
+    if data:
+        warns_count = data[0] + 1
+        cursor.execute("UPDATE warns SET warns=? WHERE user_id=?", (warns_count, user.id))
+    else:
+        warns_count = 1
+        cursor.execute("INSERT INTO warns VALUES (?, ?)", (user.id, warns_count))
+
+    conn.commit()
+
+    # 🚫 AUTO BAN
+    if warns_count >= 3:
+        await context.bot.ban_chat_member(update.effective_chat.id, user.id)
+
+        cursor.execute("DELETE FROM warns WHERE user_id=?", (user.id,))
+        conn.commit()
+
+        return await update.message.reply_text(f"🚫 {username} baneado por 3 warns")
+
+    await update.message.reply_text(f"⚠️ {username} tiene {warns_count}/3 warns")
+
+
+
 # ---------------- INFO ----------------
-def tiempo_restante(segundos):
-    dias = segundos // 86400
-    horas = (segundos % 86400) // 3600
-    return f"{dias}d {horas}h"
 
 async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.message.reply_to_message.from_user
+    user = await obtener_usuario(update, context)
+    if not user:
+        return await update.message.reply_text("❌ Usuario no encontrado")
+
     user_id = user.id
     username = f"@{user.username}" if user.username else user.first_name
 
@@ -156,10 +327,11 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     vip_data = cursor.fetchone()
 
     if vip_data:
-        _, exp = vip_data
+        exp = vip_data
         restante = exp - int(time.time())
+
         fecha = time.strftime('%d/%m/%Y', time.localtime(exp))
-        restante = tiempo_restante(restante)
+        restante = f"{restante//86400}d {(restante%86400)//3600}h"
         plan = "VIP"
     else:
         fecha = "No"
@@ -178,8 +350,8 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ⏰ Expira: {fecha}
 ⏳ Tiempo restante: {restante}
 """
-    await update.message.reply_text(texto)
 
+    await update.message.reply_text(texto)
 # ---------------- AUTO BAN ----------------
 async def verificar_vips(context: ContextTypes.DEFAULT_TYPE):
     ahora = int(time.time())
@@ -283,6 +455,14 @@ async def refe(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------- MAIN ----------------
 app = ApplicationBuilder().token(TOKEN).build()
 
+from telegram.ext import MessageHandler, filters
+
+app.add_handler(MessageHandler(filters.ALL, guardar_usuario))
+
+app.add_handler(CommandHandler("mute", mute))
+app.add_handler(CommandHandler("unmute", unmute))
+app.add_handler(CommandHandler("warn", warn))
+app.add_handler(CommandHandler("warns", warns_cmd))
 app.add_handler(CommandHandler("id", get_id))
 app.add_handler(CommandHandler("addrole", addrole))
 app.add_handler(CommandHandler("removerole", removerole))
