@@ -8,8 +8,8 @@ from PIL import Image
 from io import BytesIO
 
 # ---------------- CONFIG ----------------
-TOKEN = "TU_TOKEN_AQUI"
-DESTINO_CHAT_ID = -100XXXXXXXXX  # cambia esto
+TOKEN = "8603013918:AAFvrsFz-V6ros2ULgjt4EZI2kh6OzE4H4U"
+DESTINO_CHAT_ID = -1003856217956  # cambia esto
 
 # ---------------- RUTA WATERMARK ----------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
