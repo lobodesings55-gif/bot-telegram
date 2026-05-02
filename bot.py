@@ -214,7 +214,7 @@ app.add_handler(CommandHandler("refe", refe))
 
 # ✅ DESPUÉS LOS GENERALES
 app.add_handler(MessageHandler(filters.ALL, guardar_usuario))
-app.add_handler(MessageHandler(filters.ALL, debug))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, debug))
 
 print("✅ Bot corriendo...")
 app.run_polling()
