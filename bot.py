@@ -1,279 +1,229 @@
 import os
 import sqlite3
+import time
+import subprocess
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import *
 from PIL import Image
 from io import BytesIO
 
-TOKEN = "AQUI_TU_TOKEN"
-DESTINO_CHAT_ID = -1001234567890
+# ---------------- CONFIG ----------------
+TOKEN = "8664024055:AAGI2btOAzCViMTW7TXPDre5RyJzmS3D60k"
+DESTINO_CHAT_ID = -1003856217956  # grupo destino
 
 # ---------------- RUTA WATERMARK ----------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WATERMARK_PATH = os.path.join(BASE_DIR, "watermark.png")
 
-# ---------------- BASE DE DATOS ----------------
-conn = sqlite3.connect("roles.db", check_same_thread=False)
+# ---------------- DB ----------------
+conn = sqlite3.connect("bot.db", check_same_thread=False)
 cursor = conn.cursor()
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS roles (
-    user_id INTEGER PRIMARY KEY,
-    role TEXT
-)
-""")
+cursor.execute("CREATE TABLE IF NOT EXISTS vip_users (user_id INTEGER PRIMARY KEY, start_at INTEGER, expires_at INTEGER)")
+cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, name TEXT)")
 conn.commit()
 
-# ---------------- ESTILOS DE ROLES ----------------
-role_styles = {
-    "seller": "💰 Seller",
-    "admin": "🛠 Admin",
-    "owner": "👑 Owner"
-}
+# ---------------- GUARDAR USUARIOS ----------------
+async def guardar_usuario(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user:
+        cursor.execute("INSERT OR REPLACE INTO users VALUES (?, ?, ?)",
+                       (user.id, user.username or "", user.first_name))
+        conn.commit()
 
-# ---------------- VERIFICAR ADMIN ----------------
+# ---------------- ADMIN ----------------
 async def es_admin(update, context):
-    member = await context.bot.get_chat_member(
-        update.effective_chat.id,
-        update.effective_user.id
-    )
+    member = await context.bot.get_chat_member(update.effective_chat.id, update.effective_user.id)
     return member.status in ["administrator", "creator"]
 
-# ---------------- ID ----------------
-async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        f"🆔 Chat ID: {update.effective_chat.id}\n👤 Tu ID: {update.effective_user.id}"
-    )
-
-# ---------------- ADD ROLE ----------------
-async def addrole(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await es_admin(update, context):
-        return await update.message.reply_text("❌ No tienes permisos")
-
-    user_id = None
-    username = None
-
+# ---------------- OBTENER USUARIO ----------------
+async def obtener_usuario(update, context):
     if update.message.reply_to_message:
-        user = update.message.reply_to_message.from_user
-        user_id = user.id
-        username = f"@{user.username}" if user.username else user.first_name
+        return update.message.reply_to_message.from_user
 
-        if len(context.args) < 1:
-            return await update.message.reply_text("Uso: /addrole (respondiendo) rol")
+    if context.args:
+        arg = context.args[0]
 
-        role = context.args[0].lower()
+        if arg.isdigit():
+            try:
+                return (await context.bot.get_chat_member(update.effective_chat.id, int(arg))).user
+            except:
+                return None
 
+        username = arg.replace("@", "")
+        cursor.execute("SELECT * FROM users WHERE username=?", (username,))
+        data = cursor.fetchone()
+
+        if data:
+            class U:
+                def __init__(self, id, username, name):
+                    self.id=id; self.username=username; self.first_name=name
+            return U(*data)
+
+    return None
+
+# ---------------- PARSER TIEMPO ----------------
+def parse_tiempo(texto):
+    texto = texto.lower()
+
+    if texto in ["perma", "permanente", "∞"]:
+        return -1
+
+    texto = texto.replace("dias","d").replace("dia","d")
+    texto = texto.replace("semanas","w").replace("semana","w")
+    texto = texto.replace("meses","m").replace("mes","m")
+
+    try:
+        if texto.isdigit():
+            return int(texto)
+        if "d" in texto:
+            return int(texto.replace("d",""))
+        if "w" in texto:
+            return int(texto.replace("w",""))*7
+        if "m" in texto:
+            return int(texto.replace("m",""))*30
+    except:
+        return None
+
+    return None
+
+# ---------------- VIP ----------------
+async def vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await es_admin(update, context):
+        return await update.message.reply_text("❌ Sin permisos")
+
+    user = await obtener_usuario(update, context)
+    if not user:
+        return await update.message.reply_text("❌ Usuario no encontrado")
+
+    texto = " ".join(context.args)
+    dias = parse_tiempo(texto.replace(f"@{user.username}", "").strip())
+
+    if dias is None:
+        return await update.message.reply_text("❌ Tiempo inválido")
+
+    ahora = int(time.time())
+
+    if dias == -1:
+        cursor.execute("INSERT OR REPLACE INTO vip_users VALUES (?, ?, ?)", (user.id, ahora, -1))
+        conn.commit()
+        return await update.message.reply_text("💎 VIP PERMANENTE activado")
+
+    expira = ahora + dias * 86400
+
+    cursor.execute("INSERT OR REPLACE INTO vip_users VALUES (?, ?, ?)", (user.id, ahora, expira))
+    conn.commit()
+
+    await update.message.reply_text(f"💎 VIP {dias} días activado")
+
+# ---------------- INFO ----------------
+async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = await obtener_usuario(update, context)
+    if not user:
+        return await update.message.reply_text("❌ Usuario no encontrado")
+
+    cursor.execute("SELECT * FROM vip_users WHERE user_id=?", (user.id,))
+    data = cursor.fetchone()
+
+    if data:
+        _, start, exp = data
+
+        if exp == -1:
+            plan = "VIP PERMANENTE"
+            fecha = "∞"
+            restante = "∞"
+        else:
+            restante_seg = exp - int(time.time())
+            fecha = time.strftime('%d/%m/%Y', time.localtime(exp))
+            restante = f"{restante_seg//86400}d {(restante_seg%86400)//3600}h"
+            plan = "VIP"
     else:
-        if len(context.args) < 2:
-            return await update.message.reply_text("Uso: /addrole @usuario rol")
+        plan="Free"; fecha="No"; restante="0"
 
-        username_arg = context.args[0].replace("@", "")
-        role = context.args[1].lower()
+    await update.message.reply_text(f"""
+👤 {user.first_name}
+🆔 {user.id}
 
-        admins = await context.bot.get_chat_administrators(update.effective_chat.id)
-
-        for admin in admins:
-            if admin.user.username == username_arg:
-                user_id = admin.user.id
-                username = f"@{username_arg}"
-                break
-
-    if not user_id:
-        return await update.message.reply_text("❌ Usuario no encontrado")
-
-    cursor.execute("INSERT OR REPLACE INTO roles VALUES (?, ?)", (user_id, role))
-    conn.commit()
-
-    await update.message.reply_text(f"✅ Rol '{role}' asignado a {username}")
-
-# ---------------- REMOVE ROLE ----------------
-async def removerole(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await es_admin(update, context):
-        return await update.message.reply_text("❌ No tienes permisos")
-
-    user_id = None
-    username = None
-
-    if update.message.reply_to_message:
-        user = update.message.reply_to_message.from_user
-        user_id = user.id
-        username = f"@{user.username}" if user.username else user.first_name
-
-    elif len(context.args) >= 1:
-        username_arg = context.args[0].replace("@", "")
-        admins = await context.bot.get_chat_administrators(update.effective_chat.id)
-
-        for admin in admins:
-            if admin.user.username == username_arg:
-                user_id = admin.user.id
-                username = f"@{username_arg}"
-                break
-
-    if not user_id:
-        return await update.message.reply_text("❌ Usuario no encontrado")
-
-    cursor.execute("DELETE FROM roles WHERE user_id=?", (user_id,))
-    conn.commit()
-
-    await update.message.reply_text(f"🗑 Rol eliminado de {username}")
-
-# ---------------- EDIT ROLE ----------------
-async def editrole(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await es_admin(update, context):
-        return await update.message.reply_text("❌ No tienes permisos")
-
-    user_id = None
-    username = None
-
-    if update.message.reply_to_message:
-        user = update.message.reply_to_message.from_user
-        user_id = user.id
-        username = f"@{user.username}" if user.username else user.first_name
-
-        if len(context.args) < 1:
-            return await update.message.reply_text("Uso: /editrole (respondiendo) rol")
-
-        new_role = context.args[0].lower()
-
-    elif len(context.args) >= 2:
-        username_arg = context.args[0].replace("@", "")
-        new_role = context.args[1].lower()
-
-        admins = await context.bot.get_chat_administrators(update.effective_chat.id)
-
-        for admin in admins:
-            if admin.user.username == username_arg:
-                user_id = admin.user.id
-                username = f"@{username_arg}"
-                break
-
-    if not user_id:
-        return await update.message.reply_text("❌ Usuario no encontrado")
-
-    cursor.execute("SELECT role FROM roles WHERE user_id=?", (user_id,))
-    if not cursor.fetchone():
-        return await update.message.reply_text("⚠️ Ese usuario no tiene rol")
-
-    cursor.execute("UPDATE roles SET role=? WHERE user_id=?", (new_role, user_id))
-    conn.commit()
-
-    await update.message.reply_text(f"✏️ Rol actualizado a '{new_role}' para {username}")
+📋 Plan: {plan}
+⏰ Expira: {fecha}
+⏳ Restante: {restante}
+""")
 
 # ---------------- STAFF ----------------
 async def staff(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admins = await context.bot.get_chat_administrators(update.effective_chat.id)
-
-    text = "👮 STAFF DEL GRUPO 👮\n\n"
+    text = "👮 STAFF 👮\n\n"
 
     for admin in admins:
         user = admin.user
         name = f"@{user.username}" if user.username else user.first_name
-
-        cursor.execute("SELECT role FROM roles WHERE user_id=?", (user.id,))
-        data = cursor.fetchone()
-
-        if data:
-            role = role_styles.get(data[0], data[0])
-        else:
-            role = "👑 Owner" if admin.status == "creator" else "🛠 Admin"
-
-        text += f"{role} ➤ {name}\n"
+        rol = "👑 Owner" if admin.status == "creator" else "🛠 Admin"
+        text += f"{rol} ➤ {name}\n"
 
     await update.message.reply_text(text)
 
-# ---------------- BAN ----------------
-async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await es_admin(update, context):
-        return await update.message.reply_text("❌ No tienes permisos")
-
-    if update.message.reply_to_message:
-        await context.bot.ban_chat_member(
-            update.effective_chat.id,
-            update.message.reply_to_message.from_user.id
-        )
-        await update.message.reply_text("🚫 Usuario baneado")
-
-# ---------------- PROMOTE ----------------
-async def promote(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await es_admin(update, context):
-        return await update.message.reply_text("❌ No tienes permisos")
-
-    if update.message.reply_to_message:
-        user_id = update.message.reply_to_message.from_user.id
-        await context.bot.promote_chat_member(
-            update.effective_chat.id,
-            user_id,
-            can_delete_messages=True,
-            can_restrict_members=True
-        )
-        await update.message.reply_text("⬆️ Ahora es admin")
-
-# ---------------- DEMOTE ----------------
-async def demote(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await es_admin(update, context):
-        return await update.message.reply_text("❌ No tienes permisos")
-
-    if update.message.reply_to_message:
-        user_id = update.message.reply_to_message.from_user.id
-        await context.bot.promote_chat_member(
-            update.effective_chat.id,
-            user_id,
-            can_delete_messages=False,
-            can_restrict_members=False
-        )
-        await update.message.reply_text("⬇️ Permisos removidos")
+# ---------------- WATERMARK ----------------
+def add_watermark_ffmpeg(input_file, output_file):
+    subprocess.run([
+        "ffmpeg","-i",input_file,"-i",WATERMARK_PATH,
+        "-filter_complex","[1]scale=350:350,format=rgba,colorchannelmixer=aa=0.6[wm];[0][wm]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2",
+        output_file,"-y"
+    ])
 
 # ---------------- REFE ----------------
 async def refe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await es_admin(update, context):
-        return await update.message.reply_text("❌ No tienes permisos")
+        return await update.message.reply_text("❌ Sin permisos")
 
     msg = update.message.reply_to_message
-    if not msg or not msg.photo:
-        return await update.message.reply_text("❌ Responde a una imagen")
+    if not msg:
+        return await update.message.reply_text("Responde a imagen/video/gif")
 
     user = msg.from_user
-    username = f"@{user.username}" if user.username else user.first_name
-    texto_usuario = msg.caption if msg.caption else ""
+    caption = f"VIP\n@{user.username}"
 
-    file = await msg.photo[-1].get_file()
-    img_bytes = await file.download_as_bytearray()
-    base = Image.open(BytesIO(img_bytes)).convert("RGBA")
+    # FOTO
+    if msg.photo:
+        file = await msg.photo[-1].get_file()
+        img = Image.open(BytesIO(await file.download_as_bytearray())).convert("RGBA")
 
-    width, height = base.size
+        wm = Image.open(WATERMARK_PATH).resize((350,350)).convert("RGBA")
+        wm.putalpha(int(255*0.6))
 
-    if not os.path.exists(WATERMARK_PATH):
-        return await update.message.reply_text("❌ No encuentro el watermark")
+        img.alpha_composite(wm, ((img.width-350)//2,(img.height-350)//2))
 
-    watermark = Image.open(WATERMARK_PATH).convert("RGBA")
-    wm_size = min(800, width, height)
-    watermark = watermark.resize((wm_size, wm_size))
+        bio = BytesIO()
+        bio.name="img.png"
+        img.save(bio,"PNG")
+        bio.seek(0)
 
-    watermark.putalpha(80)
+        await context.bot.send_photo(DESTINO_CHAT_ID, bio, caption=caption)
 
-    base.alpha_composite(watermark, ((width - wm_size)//2, (height - wm_size)//2))
+    # VIDEO
+    elif msg.video:
+        await msg.video.get_file().download_to_drive("v.mp4")
+        add_watermark_ffmpeg("v.mp4","out.mp4")
+        await context.bot.send_video(DESTINO_CHAT_ID, open("out.mp4","rb"), caption=caption)
 
-    output = BytesIO()
-    output.name = "resultado.png"
-    base.save(output, "PNG")
-    output.seek(0)
+    # GIF
+    elif msg.animation:
+        await msg.animation.get_file().download_to_drive("g.gif")
+        add_watermark_ffmpeg("g.gif","out.gif")
+        await context.bot.send_animation(DESTINO_CHAT_ID, open("out.gif","rb"), caption=caption)
 
-    caption = f"MAMA CULOS VIP\n{username}\n{texto_usuario}"
+    else:
+        return await update.message.reply_text("❌ Solo imagen/video/gif")
 
-    await context.bot.send_photo(DESTINO_CHAT_ID, output, caption=caption)
-    await update.message.reply_text("✅ Imagen enviada")
+    await update.message.reply_text("✅ Enviado")
 
 # ---------------- MAIN ----------------
 app = ApplicationBuilder().token(TOKEN).build()
 
-app.add_handler(CommandHandler("id", get_id))
-app.add_handler(CommandHandler("addrole", addrole))
-app.add_handler(CommandHandler("removerole", removerole))
-app.add_handler(CommandHandler("editrole", editrole))
+app.add_handler(MessageHandler(filters.ALL, guardar_usuario))
+
+app.add_handler(CommandHandler("vip", vip))
+app.add_handler(CommandHandler("info", info))
 app.add_handler(CommandHandler("staff", staff))
-app.add_handler(CommandHandler("ban", ban))
-app.add_handler(CommandHandler("promote", promote))
-app.add_handler(CommandHandler("demote", demote))
 app.add_handler(CommandHandler("refe", refe))
 
 print("Bot corriendo...")
